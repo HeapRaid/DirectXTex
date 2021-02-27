@@ -200,6 +200,9 @@ namespace DirectX
 
         DDS_FLAGS_ALLOW_LARGE_FILES     = 0x1000000,
             // Enables the loader to read large dimension .dds files (i.e. greater than known hardware requirements)
+
+        DDS_FLAGS_FORCE_888_LEGACY      = 0x2000000,
+            // Force conversion of DXGI_FORMAT_R8G8B8A8_UNORM to RGB888 for DDS writer
     };
 
     enum TGA_FLAGS : unsigned long

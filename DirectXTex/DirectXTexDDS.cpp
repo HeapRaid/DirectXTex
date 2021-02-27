@@ -566,6 +566,11 @@ HRESULT DirectX::_EncodeDDSHeader(
     if (IsPalettized(metadata.format))
         return HRESULT_E_NOT_SUPPORTED;
 
+    if (flags & DDS_FLAGS_FORCE_888_LEGACY)
+    {
+        flags |= DDS_FLAGS_FORCE_DX9_LEGACY;
+    }
+
     if (metadata.arraySize > 1)
     {
         if ((metadata.arraySize != 6) || (metadata.dimension != TEX_DIMENSION_TEXTURE2D) || !(metadata.IsCubemap()))
@@ -588,7 +593,6 @@ HRESULT DirectX::_EncodeDDSHeader(
     {
         switch (metadata.format)
         {
-        case DXGI_FORMAT_R8G8B8A8_UNORM:        memcpy(&ddpf, &DDSPF_A8B8G8R8, sizeof(DDS_PIXELFORMAT)); break;
         case DXGI_FORMAT_R16G16_UNORM:          memcpy(&ddpf, &DDSPF_G16R16, sizeof(DDS_PIXELFORMAT)); break;
         case DXGI_FORMAT_R8G8_UNORM:            memcpy(&ddpf, &DDSPF_A8L8, sizeof(DDS_PIXELFORMAT)); break;
         case DXGI_FORMAT_R16_UNORM:             memcpy(&ddpf, &DDSPF_L16, sizeof(DDS_PIXELFORMAT)); break;
@@ -610,6 +614,17 @@ HRESULT DirectX::_EncodeDDSHeader(
         case DXGI_FORMAT_B8G8R8X8_UNORM:        memcpy(&ddpf, &DDSPF_X8R8G8B8, sizeof(DDS_PIXELFORMAT)); break; // DXGI 1.1
         case DXGI_FORMAT_B4G4R4A4_UNORM:        memcpy(&ddpf, &DDSPF_A4R4G4B4, sizeof(DDS_PIXELFORMAT)); break; // DXGI 1.2
         case DXGI_FORMAT_YUY2:                  memcpy(&ddpf, &DDSPF_YUY2, sizeof(DDS_PIXELFORMAT)); break; // DXGI 1.2
+        case DXGI_FORMAT_R8G8B8A8_UNORM:
+            if (flags & DDS_FLAGS_FORCE_888_LEGACY)
+            {
+                // Legacy DX9 RGB888 pixel format
+                memcpy(&ddpf, &DDSPF_R8G8B8, sizeof(DDS_PIXELFORMAT));
+            }
+            else
+            {
+                memcpy(&ddpf, &DDSPF_A8B8G8R8, sizeof(DDS_PIXELFORMAT));
+            }
+            break;
 
         // Legacy D3DX formats using D3DFMT enum value as FourCC
         case DXGI_FORMAT_R32G32B32A32_FLOAT:
@@ -1992,6 +2007,7 @@ HRESULT DirectX::SaveToDDSMemory(
         return hr;
 
     bool fastpath = true;
+    bool force24bpp = (flags & DDS_FLAGS_FORCE_888_LEGACY) && metadata.format == DXGI_FORMAT_R8G8B8A8_UNORM;
 
     for (size_t i = 0; i < nimages; ++i)
     {
@@ -2002,7 +2018,7 @@ HRESULT DirectX::SaveToDDSMemory(
             return E_FAIL;
 
         size_t ddsRowPitch, ddsSlicePitch;
-        hr = ComputePitch(metadata.format, images[i].width, images[i].height, ddsRowPitch, ddsSlicePitch, CP_FLAGS_NONE);
+        hr = ComputePitch(metadata.format, images[i].width, images[i].height, ddsRowPitch, ddsSlicePitch, force24bpp ? CP_FLAGS_24BPP : CP_FLAGS_NONE);
         if (FAILED(hr))
             return hr;
 
@@ -2064,6 +2080,23 @@ HRESULT DirectX::SaveToDDSMemory(
                 {
                     size_t pixsize = images[index].slicePitch;
                     memcpy(pDestination, images[index].pixels, pixsize);
+
+                    pDestination += pixsize;
+                    remaining -= pixsize;
+                }
+                else if (force24bpp)
+                {
+                    const uint32_t* __restrict sPtr = reinterpret_cast<uint32_t*>(images[index].pixels);
+                    uint8_t* __restrict dPtr = pDestination;
+
+                    size_t pixsize = images[index].slicePitch;
+                    for (size_t i = 0; i < pixsize - 3; i += 4)
+                    {
+                        uint32_t t = *(sPtr++);
+                        *(dPtr++) = (t >> 16) & 0xff;
+                        *(dPtr++) = (t >> 8) & 0xff;
+                        *(dPtr++) = t & 0xff;
+                    }
 
                     pDestination += pixsize;
                     remaining -= pixsize;
@@ -2130,6 +2163,23 @@ HRESULT DirectX::SaveToDDSMemory(
                 {
                     size_t pixsize = images[index].slicePitch;
                     memcpy(pDestination, images[index].pixels, pixsize);
+
+                    pDestination += pixsize;
+                    remaining -= pixsize;
+                }
+                else if (force24bpp)
+                {
+                    const uint32_t* __restrict sPtr = reinterpret_cast<uint32_t*>(images[index].pixels);
+                    uint8_t* __restrict dPtr = pDestination;
+
+                    size_t pixsize = images[index].slicePitch;
+                    for (size_t i = 0; i < pixsize - 3; i += 4)
+                    {
+                        uint32_t t = *(sPtr++);
+                        *(dPtr++) = (t >> 16) & 0xff;
+                        *(dPtr++) = (t >> 8) & 0xff;
+                        *(dPtr++) = t & 0xff;
+                    }
 
                     pDestination += pixsize;
                     remaining -= pixsize;
