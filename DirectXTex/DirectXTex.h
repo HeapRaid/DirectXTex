@@ -18,7 +18,9 @@
 #include <vector>
 
 #if defined(WIN32) || defined(_WIN32)
-#if !defined(__d3d11_h__) && !defined(__d3d11_x_h__) && !defined(__d3d12_h__) && !defined(__d3d12_x_h__) && !defined(__XBOX_D3D12_X__)
+#if defined(_D3D9_H_)
+#include <dxgiformat.h>
+#elif !defined(__d3d11_h__) && !defined(__d3d11_x_h__) && !defined(__d3d12_h__) && !defined(__d3d12_x_h__) && !defined(__XBOX_D3D12_X__)
 #ifdef _GAMING_XBOX_SCARLETT
 #include <d3d12_xs.h>
 #elif defined(_GAMING_XBOX)
