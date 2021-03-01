@@ -1,6 +1,6 @@
 //-------------------------------------------------------------------------------------
 // DirectXTex.inl
-//  
+//
 // DirectX Texture Library
 //
 // Copyright (c) Microsoft Corporation.
@@ -14,6 +14,7 @@
 //=====================================================================================
 // Bitmask flags enumerator operators
 //=====================================================================================
+#ifdef DEFINE_ENUM_FLAG_OPERATORS
 DEFINE_ENUM_FLAG_OPERATORS(CP_FLAGS);
 DEFINE_ENUM_FLAG_OPERATORS(DDS_FLAGS);
 DEFINE_ENUM_FLAG_OPERATORS(TGA_FLAGS);
@@ -24,6 +25,7 @@ DEFINE_ENUM_FLAG_OPERATORS(TEX_PMALPHA_FLAGS);
 DEFINE_ENUM_FLAG_OPERATORS(TEX_COMPRESS_FLAGS);
 DEFINE_ENUM_FLAG_OPERATORS(CNMAP_FLAGS);
 DEFINE_ENUM_FLAG_OPERATORS(CMSE_FLAGS);
+#endif
 
 // WIC_FILTER modes match TEX_FILTER modes
 inline constexpr WIC_FLAGS operator|(WIC_FLAGS a, TEX_FILTER_FLAGS b) { return static_cast<WIC_FLAGS>(static_cast<unsigned long>(a) | static_cast<unsigned long>(b & TEX_FILTER_MODE_MASK)); }

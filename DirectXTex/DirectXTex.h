@@ -33,7 +33,6 @@
 #endif
 #else
 #include <directx/dxgiformat.h>
-#include <wsl/winadapter.h>
 #endif
 
 #include <DirectXMath.h>
