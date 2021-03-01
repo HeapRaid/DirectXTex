@@ -24,6 +24,7 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "sal.h"
 
 namespace DirectX
 {

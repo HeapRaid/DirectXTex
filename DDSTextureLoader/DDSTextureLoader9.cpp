@@ -14,7 +14,6 @@
 // http://go.microsoft.com/fwlink/?LinkId=248929
 //--------------------------------------------------------------------------------------
 
-#include "DDSTextureLoader9.h"
 
 #include <d3d9types.h>
 
@@ -23,6 +22,13 @@
 #include <cstring>
 #include <memory>
 #include <new>
+
+#ifndef WIN32
+#include <fstream>
+#include <filesystem>
+#endif
+
+#include "DDSTextureLoader9.h"
 
 #include <wrl/client.h>
 
@@ -42,6 +48,25 @@ using Microsoft::WRL::ComPtr;
                 ((uint32_t)(uint8_t)(ch0) | ((uint32_t)(uint8_t)(ch1) << 8) |       \
                 ((uint32_t)(uint8_t)(ch2) << 16) | ((uint32_t)(uint8_t)(ch3) << 24 ))
 #endif /* defined(MAKEFOURCC) */
+
+// HRESULT_FROM_WIN32(ERROR_ARITHMETIC_OVERFLOW)
+#define HRESULT_E_ARITHMETIC_OVERFLOW static_cast<HRESULT>(0x80070216L)
+
+// HRESULT_FROM_WIN32(ERROR_NOT_SUPPORTED)
+#define HRESULT_E_NOT_SUPPORTED static_cast<HRESULT>(0x80070032L)
+
+// HRESULT_FROM_WIN32(ERROR_HANDLE_EOF)
+#define HRESULT_E_HANDLE_EOF static_cast<HRESULT>(0x80070026L)
+
+#ifndef E_INVALIDARG
+#define E_INVALIDARG   ((HRESULT)0x80000003L)
+#endif
+
+#ifndef WIN32
+// This is an incomplete approximation of memcpy_s
+#define memcpy_s(dest, destsz, src, count) \
+    memcpy(dest, src, count > destsz ? destsz : count)
+#endif
 
 //--------------------------------------------------------------------------------------
 // DDS file structure definitions
@@ -109,11 +134,13 @@ struct DDS_HEADER
 //--------------------------------------------------------------------------------------
 namespace
 {
+#ifdef WIN32
     struct handle_closer { void operator()(HANDLE h) noexcept { if (h) CloseHandle(h); } };
 
     using ScopedHandle = std::unique_ptr<void, handle_closer>;
 
     inline HANDLE safe_handle(HANDLE h) noexcept { return (h == INVALID_HANDLE_VALUE) ? nullptr : h; }
+#endif
 
     //--------------------------------------------------------------------------------------
     HRESULT LoadTextureDataFromMemory(
@@ -161,7 +188,7 @@ namespace
             (MAKEFOURCC('D', 'X', '1', '0') == hdr->ddspf.fourCC))
         {
             // We don't support the new DX10 header for Direct3D 9
-            return HRESULT_FROM_WIN32(ERROR_NOT_SUPPORTED);
+            return HRESULT_E_NOT_SUPPORTED;
         }
 
         // setup the pointers in the process request
@@ -190,6 +217,7 @@ namespace
         *bitSize = 0;
 
         // open the file
+#ifdef WIN32
 #if (_WIN32_WINNT >= _WIN32_WINNT_WIN8)
         ScopedHandle hFile(safe_handle(CreateFile2(fileName,
             GENERIC_READ,
@@ -224,14 +252,34 @@ namespace
             return E_FAIL;
         }
 
+        size_t len = fileInfo.EndOfFile.LowPart;
+#else // !WIN32
+        std::ifstream inFile(std::filesystem::path(fileName), std::ios::in | std::ios::binary | std::ios::ate);
+        if (!inFile)
+            return E_FAIL;
+
+        std::streampos fileLen = inFile.tellg();
+        if (!inFile)
+            return E_FAIL;
+
+        if (fileLen > UINT32_MAX)
+            return E_FAIL;
+
+        inFile.seekg(0, std::ios::beg);
+        if (!inFile)
+            return E_FAIL;
+
+        size_t len = fileLen;
+#endif
+
         // Need at least enough data to fill the header and magic number to be a valid DDS
-        if (fileInfo.EndOfFile.LowPart < (sizeof(uint32_t) + sizeof(DDS_HEADER)))
+        if (len < (sizeof(uint32_t) + sizeof(DDS_HEADER)))
         {
             return E_FAIL;
         }
 
         // create enough space for the file data
-        ddsData.reset(new (std::nothrow) uint8_t[fileInfo.EndOfFile.LowPart]);
+        ddsData.reset(new (std::nothrow) uint8_t[len]);
         if (!ddsData)
         {
             return E_OUTOFMEMORY;
@@ -239,9 +287,10 @@ namespace
 
         // read the data in
         DWORD bytesRead = 0;
+#ifdef WIN32
         if (!ReadFile(hFile.get(),
             ddsData.get(),
-            fileInfo.EndOfFile.LowPart,
+            len,
             &bytesRead,
             nullptr
         ))
@@ -249,8 +298,14 @@ namespace
             ddsData.reset();
             return HRESULT_FROM_WIN32(GetLastError());
         }
+#else // !WIN32
+        inFile.read(reinterpret_cast<char*>(ddsData.get()), len);
+        if (!inFile)
+            return E_FAIL;
+        bytesRead = inFile.gcount();
+#endif
 
-        if (bytesRead < fileInfo.EndOfFile.LowPart)
+        if (bytesRead < len)
         {
             ddsData.reset();
             return E_FAIL;
@@ -280,14 +335,14 @@ namespace
         {
             // We don't support the new DX10 header for Direct3D 9
             ddsData.reset();
-            return HRESULT_FROM_WIN32(ERROR_NOT_SUPPORTED);
+            return HRESULT_E_NOT_SUPPORTED;
         }
 
         // setup the pointers in the process request
         *header = hdr;
         auto offset = sizeof(uint32_t) + sizeof(DDS_HEADER);
         *bitData = ddsData.get() + offset;
-        *bitSize = fileInfo.EndOfFile.LowPart - offset;
+        *bitSize = len - offset;
 
         return S_OK;
     }
@@ -477,7 +532,7 @@ namespace
 #if defined(_M_IX86) || defined(_M_ARM) || defined(_M_HYBRID_X86_ARM64)
         static_assert(sizeof(size_t) == 4, "Not a 32-bit platform!");
         if (numBytes > UINT32_MAX || rowBytes > UINT32_MAX || numRows > UINT32_MAX)
-            return HRESULT_FROM_WIN32(ERROR_ARITHMETIC_OVERFLOW);
+            return HRESULT_E_ARITHMETIC_OVERFLOW;
 #else
         static_assert(sizeof(size_t) == 8, "Not a 64-bit platform!");
 #endif
@@ -763,7 +818,7 @@ namespace
         // Bound sizes (for security purposes we don't trust DDS file metadata larger than the D3D 10 hardware requirements)
         if (iMipCount > 14u /*D3D10_REQ_MIP_LEVELS*/)
         {
-            return HRESULT_FROM_WIN32(ERROR_NOT_SUPPORTED);
+            return HRESULT_E_NOT_SUPPORTED;
         }
 
         // We could support a subset of 'DX10' extended header DDS files, but we'll assume here we are only
@@ -772,7 +827,7 @@ namespace
         D3DFORMAT fmt = GetD3D9Format(header->ddspf);
         if (fmt == D3DFMT_UNKNOWN || BitsPerPixel(fmt) == 0)
         {
-            return HRESULT_FROM_WIN32(ERROR_NOT_SUPPORTED);
+            return HRESULT_E_NOT_SUPPORTED;
         }
 
         if (header->flags & DDS_HEADER_FLAGS_VOLUME)
@@ -783,7 +838,7 @@ namespace
                 || (iHeight > 2048u /*D3D10_REQ_TEXTURE3D_U_V_OR_W_DIMENSION*/)
                 || (iDepth > 2048u /*D3D10_REQ_TEXTURE3D_U_V_OR_W_DIMENSION*/))
             {
-                return HRESULT_FROM_WIN32(ERROR_NOT_SUPPORTED);
+                return HRESULT_E_NOT_SUPPORTED;
             }
 
             // Create the volume texture (let the runtime do the validation)
@@ -819,11 +874,11 @@ namespace
                 GetSurfaceInfo(iWidth, iHeight, fmt, &NumBytes, &RowBytes, &NumRows);
 
                 if (NumBytes > UINT32_MAX || RowBytes > UINT32_MAX)
-                    return HRESULT_FROM_WIN32(ERROR_ARITHMETIC_OVERFLOW);
+                    return HRESULT_E_ARITHMETIC_OVERFLOW;
 
                 if ((pSrcBits + (NumBytes * iDepth)) > pEndBits)
                 {
-                    return HRESULT_FROM_WIN32(ERROR_HANDLE_EOF);
+                    return HRESULT_E_HANDLE_EOF;
                 }
 
                 if (SUCCEEDED(pStagingTexture->LockBox(i, &LockedBox, nullptr, 0)))
@@ -875,13 +930,13 @@ namespace
             if ((iWidth > 8192u /*D3D10_REQ_TEXTURECUBE_DIMENSION*/)
                 || (iHeight > 8192u /*D3D10_REQ_TEXTURECUBE_DIMENSION*/))
             {
-                return HRESULT_FROM_WIN32(ERROR_NOT_SUPPORTED);
+                return HRESULT_E_NOT_SUPPORTED;
             }
 
             // We require at least one face to be defined, and the faces must be square
             if ((header->caps2 & DDS_CUBEMAP_ALLFACES) == 0 || iHeight != iWidth)
             {
-                return HRESULT_FROM_WIN32(ERROR_NOT_SUPPORTED);
+                return HRESULT_E_NOT_SUPPORTED;
             }
 
             // Create the cubemap (let the runtime do the validation)
@@ -925,11 +980,11 @@ namespace
                     GetSurfaceInfo(w, h, fmt, &NumBytes, &RowBytes, &NumRows);
 
                     if (NumBytes > UINT32_MAX || RowBytes > UINT32_MAX)
-                        return HRESULT_FROM_WIN32(ERROR_ARITHMETIC_OVERFLOW);
+                        return HRESULT_E_ARITHMETIC_OVERFLOW;
 
                     if ((pSrcBits + NumBytes) > pEndBits)
                     {
-                        return HRESULT_FROM_WIN32(ERROR_HANDLE_EOF);
+                        return HRESULT_E_HANDLE_EOF;
                     }
 
                     if (SUCCEEDED(pStagingTexture->LockRect(static_cast<D3DCUBEMAP_FACES>(f), i, &LockedRect, nullptr, 0)))
@@ -970,7 +1025,7 @@ namespace
             if ((iWidth > 8192u /*D3D10_REQ_TEXTURE2D_U_OR_V_DIMENSION*/)
                 || (iHeight > 8192u /*D3D10_REQ_TEXTURE2D_U_OR_V_DIMENSION*/))
             {
-                return HRESULT_FROM_WIN32(ERROR_NOT_SUPPORTED);
+                return HRESULT_E_NOT_SUPPORTED;
             }
 
             // Create the texture (let the runtime do the validation)
@@ -1010,11 +1065,11 @@ namespace
                 GetSurfaceInfo(iWidth, iHeight, fmt, &NumBytes, &RowBytes, &NumRows);
 
                 if (NumBytes > UINT32_MAX || RowBytes > UINT32_MAX)
-                    return HRESULT_FROM_WIN32(ERROR_ARITHMETIC_OVERFLOW);
+                    return HRESULT_E_ARITHMETIC_OVERFLOW;
 
                 if ((pSrcBits + NumBytes) > pEndBits)
                 {
-                    return HRESULT_FROM_WIN32(ERROR_HANDLE_EOF);
+                    return HRESULT_E_HANDLE_EOF;
                 }
 
                 if (SUCCEEDED(pStagingTexture->LockRect(i, &LockedRect, nullptr, 0)))
